@@ -30,12 +30,12 @@
     <property name="webpanel.version" value="1.0.2" />
     <property name="src" location="source" />
     <property name="reference" location="lib" />
-    <property name="build" location="build" />
+    <property name="build" location="PhantomBot-3.1.2" />
     <property name="classes" location="${build}/classes" />
     <property name="dist" location="dist" />
     <property name="version.name" value="${ant.project.name}-${version}" />
     <property name="version.folder" location="${dist}/${version.name}" />
-    <property name="build.dir" location="${dist}/build" />
+    <property name="build.dir" location="${dist}/PhantomBot-3.1.2" />
     <property name="res.dir" location="${build.dir}" />
     <property name="lib.dir" location="${build.dir}/lib" />
     <!-- Apache Ivy properties -->

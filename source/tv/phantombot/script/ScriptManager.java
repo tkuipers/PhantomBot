@@ -41,6 +41,7 @@ public class ScriptManager {
             script.load();
         } catch (Exception ex) {
             if (scriptFile.getPath().endsWith("init.js")) {
+                com.gmt2001.Console.err.println("Failed to load module: init.js: " + scriptFile.toPath().toAbsolutePath().toString());
                 com.gmt2001.Console.err.println("Failed to load module: init.js: " + ex.getMessage());
             } else {
                 com.gmt2001.Console.err.println("Failed to load module: " + scriptFile.getPath().replace("./scripts/./", "") + ": " + ex.getMessage());
