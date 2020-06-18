@@ -1,3 +1,8 @@
+/**
+ * TODO: 
+ * ability to reset election for mods
+ * ability to give presidency to a person
+ */ 
 (function() {
     //The states that this module can be in.
     var states = {
@@ -71,7 +76,12 @@
         //the number of tests that failed
         testFailures: 0,
         shouldTalk: true,
+        subscribers: [],
+        possibleStates: states,
 
+        /**
+         * Write  message to the specified place
+         */
         say: function(message){
             if(this.shouldTalk){
                 $.say(message)
@@ -131,19 +141,21 @@
         * Reset the system.  Clear all variables back to initialization
         */
         reset: function(){
-            if(states.PRESIDENTIAL_TERM.equals(this.state)){
+            if(this.possibleStates.PRESIDENTIAL_TERM.equals(this.state)){
                 this.say("President ending")
             }
-            else if(!states.NONE.equals(this.state)){
+            else if(!this.possibleStates.NONE.equals(this.state)){
                 this.say("Elections have been cut short...")
             }
-            this.state = states.NONE
+            this.state = this.possibleStates.NONE
             this.candidates = {}
             clearTimeout(this.timeout)
             clearInterval(this.interval)
             this.voteRecorder = {}
             this.winners = {}
+            var oldPres = this.president
             this.president = undefined
+            this.notifySubscribers(this.state, {'oldPresident': oldPres})
         },
 
         /**
@@ -153,7 +165,8 @@
             this.reset()
             $.log.event("Beginning a new election at " + $.systemTime())
             this.say(this.electionStartMessage)
-            this.state = states.ELECTION
+            this.state = this.possibleStates.ELECTION
+            this.notifySubscribers(this.state, {})
             clearTimeout(this.timeout)
             this.timeout = setTimeout(function() {
                 this.startNomination()
@@ -166,7 +179,8 @@
         startNomination: function() {
             $.log.event("Starting nomination phase: " + $.systemTime())
             this.say(this.nominationPhaseMessage)
-            this.state = states.NOMINATE
+            this.state = this.possibleStates.NOMINATE
+            this.notifySubscribers(this.state, {})
             clearTimeout(this.timeout)
             this.timeout = setTimeout(function() {
                 this.startVoting()
@@ -179,7 +193,7 @@
         startVoting: function() {
             $.log.event("Starting voting phase: " + $.systemTime())
             this.say(this.votePhaseMessage)
-            this.state = states.VOTING
+            this.state = this.possibleStates.VOTING            
             //grab the top candidates from nomination and wipe previous voting data
             this.winners = this.getTopCandidates(this.candidates, this.choiceCount, false)
             this.voteRecorder = {}
@@ -190,6 +204,7 @@
                 this.reset()
                 return
             }
+            this.notifySubscribers(this.state, {'nominees': this.winners})
             $.consoleLn("Evaluated all candidates.  On the ballot is: " + this.getKeys(this.winners))
             clearTimeout(this.timeout)
             this.timeout = setTimeout(function() {
@@ -203,7 +218,7 @@
         startPresTerm: function(){
             $.log.event("Starting Presidential Term: " + $.systemTime())
             $.consoleLn("Starting Presidential Term: " + $.systemTime())
-            this.state = states.PRESIDENTIAL_TERM
+            this.state = this.possibleStates.PRESIDENTIAL_TERM
             var choices = this.getTopCandidates(this.candidates, 2, true)
             var shouldCoup = Math.random();
             coup = false
@@ -227,6 +242,7 @@
                 this.say(this.coupWinPhaseMessage)
                 this.say(this.president)
             }
+            this.notifySubscribers(this.state, {'president': this.president, 'endTime': $.systemTime + (this.presidentLength * 1e3)})
             clearTimeout(this.timeout)
             //disable presidency in x time
             this.timeout = setTimeout(function() {
@@ -280,12 +296,9 @@
         * A user cannot nominate themselves
         */
         nominate: function(sender, args) {
-            if(states.NOMINATE.equalsIgnoreCase(this.state)){
-                if(args[1].startsWith('@')){
-                    args[1] = args[1].replace('@', '')
-                }
-                args[1] = args[1].toLowerCase()
-                sender = sender.toLowerCase()
+            if(this.possibleStates.NOMINATE.equalsIgnoreCase(this.state)){
+                args[1] = $.user.sanitize(args[1])
+                sender = $.user.sanitize(sender)
                 //disallow nominations for self.  Voting will be allowed for self.
                 if(args[1].equalsIgnoreCase(sender)){
                     this.whisper(sender, "Don't nominate yourself.")
@@ -312,12 +325,9 @@
         * A user is allowed to vote for themselves
         */
         vote: function(sender, args) {
-            if(states.VOTING.equalsIgnoreCase(this.state)){
-                if(args[1].startsWith('@')){
-                    args[1] = args[1].replace('@', '')
-                }
-                args[1] = args[1].toLowerCase()
-                sender = sender.toLowerCase()
+            if(this.possibleStates.VOTING.equalsIgnoreCase(this.state)){
+                args[1] = $.user.sanitize(args[1])
+                sender = $.user.sanitize(sender)
                 if(this.candidates[args[1]] === undefined){
                     this.candidates[args[1]] = 0
                 }
@@ -340,17 +350,29 @@
             else{
                 this.whisper(sender, "Not in voting phase.  Screw off.")
             }
+        },
+
+        subscribe: function(module){
+            this.say("New subscriber: "+module)
+            this.subscribers.push(module)
+        },
+
+        notifySubscribers(state, extra){
+            this.say("Notifying subs of state change: "+ state)
+            for(key in this.subscribers){
+                sub = this.subscribers[key]
+                if(sub.stateChange !== undefined){
+                    try{
+                        sub.stateChange(state, extra)
+                    }
+                    catch(e){
+                        $.consoleLn(err)
+                    }
+                }
+            }
         }
     }
-
-    /**
-     * @event ircChannelMessage
-     */
-    $.bind('ircChannelMessage', function(event) {
-        var username = event.getSender().toLowerCase();
-        $.electionSystem.say(username + "has said something")
-        $.timeoutUser(username, 30, "The king has decreed it")
-    });
+    $.electionSystem = electionSystem
 
     /**
     * bind to args
@@ -359,8 +381,7 @@
         var sender = event.getSender(),
             command = event.getCommand(),
             args = event.getArgs(),
-            action = args[0],
-            game = ($.getGame($.channelName) != '' ? $.getGame($.channelName) : 'Some Game');
+            action = args[0]
         if(command.equalsIgnoreCase($.electionSystem.ELECTION_ARG)){
             if($.electionSystem.validateArgs(args, sender)){
                 //simple validation of arguments has confirmed that they aren't impossible
@@ -381,18 +402,21 @@
     })
 
     $.bind('initReady', function() {
-        try{
-        $.electionSystem = electionSystem
         $.registerChatCommand('./systems/electionSystem.js', electionSystem.ELECTION_ARG, 7);
         $.registerChatSubcommand(electionSystem.ELECTION_ARG, electionSystem.NOMINATE_ARG, 7);
         $.registerChatSubcommand(electionSystem.ELECTION_ARG, electionSystem.VOTE_ARG, 7);
         $.registerChatSubcommand(electionSystem.ELECTION_ARG, electionSystem.START_ARG, 1);
         $.registerChatSubcommand(electionSystem.ELECTION_ARG, electionSystem.TEST_ARG, 0);
-        $.registerChatCommand('./systems/electionSystem.js', electionSystem.PRESIDENT_ARG, 7);
-        } catch(err){
-            $.consoleLn(err)
-        }
     })
+
+    var stateSpy = {
+        state: undefined,
+        args: undefined,
+        stateChange: function(state, extra){
+            this.state = state
+            this.args = extra
+        }
+    }
 
 
     /**
@@ -519,7 +543,7 @@
             $.electionSystem.startElection()
             $.electionSystem.startNomination()
             $.electionSystem.startVoting()
-            if($.electionSystem.state != states.NONE){
+            if($.electionSystem.state != $.electionSystem.possibleStates.NONE){
                 $.electionSystem.say("testNoNominationsResultsInNoElection failed.  Expected state to be none, not " + $.electionSystem.state)
                 testFailures++
             }
@@ -672,7 +696,7 @@
             votes = setUpNominations()
             $.electionSystem.startVoting()
             $.electionSystem.startPresTerm()
-            if($.electionSystem.state != states.NONE){
+            if($.electionSystem.state != $.electionSystem.possibleStates.NONE){
                 $.electionSystem.say("testNoVotesResultsInNoPresident failed.  Expected state to be none, not: " + $.electionSystem.state)
                 testFailures++
             }
@@ -686,73 +710,75 @@
     }
 
     /**
-    * Test that the president can run president commands
+    * Test that subscribers are notified throughout process
     */
-    var testPresCanRunPresCommand = function (){
+   var testSubscribersNotified = function (){
+       $.electionSystem.subscribe
         try{
-            votes = setUpNominations()
-            $.electionSystem.startVoting()
-            $.electionSystem.startPresTerm()
-            if($.electionSystem.state != states.NONE){
-                $.electionSystem.say("testNoVotesResultsInNoPresident failed.  Expected state to be none, not: " + $.electionSystem.state)
+            $.electionSystem.startElection()
+            if(stateSpy.state != $.electionSystem.possibleStates.ELECTION){
+                $.electionSystem.say("testSubscribersNotified failed. Expected state spy to be notified of state change.  It was not.")
                 testFailures++
+                return
             }
-            else{
-                $.electionSystem.say("testNoVotesResultsInNoPresident passed")
+            $.electionSystem.startNomination()
+            if(stateSpy.state != $.electionSystem.possibleStates.NOMINATE){
+                $.electionSystem.say("testSubscribersNotified failed. Expected state spy to be notified of state change.  It was not.")
+                testFailures++
+                return
+            }
+            $.electionSystem.nominate("testSender", ["nominate", "t"])
+            $.electionSystem.startVoting()
+            if(stateSpy.state != $.electionSystem.possibleStates.VOTING){
+                $.electionSystem.say("testSubscribersNotified failed. Expected state spy to be notified of state change.  It was not.")
+                testFailures++
+                return
+            }
+            $.electionSystem.vote("testSender", ["vote", "t"])
+            $.electionSystem.startPresTerm()
+            if(stateSpy.state != $.electionSystem.possibleStates.PRESIDENTIAL_TERM){
+                $.electionSystem.say("testSubscribersNotified failed. Expected state spy to be notified of state change.  It was not.")
+                testFailures++
+                return
             }
         } catch(err) {
-            testFailures++
             $.electionSystem.say(err)
-        }
-    }
-
-    /**
-    * Test that others cannot run president commands
-    */
-    var testOthersCannotRunPresCommand = function (){
-        try{
-            votes = setUpNominations()
-            $.electionSystem.startVoting()
-            $.electionSystem.startPresTerm()
-            if($.electionSystem.state != states.NONE){
-                $.electionSystem.say("testNoVotesResultsInNoPresident failed.  Expected state to be none, not: " + $.electionSystem.state)
-                testFailures++
-            }
-            else{
-                $.electionSystem.say("testNoVotesResultsInNoPresident passed")
-            }
-        } catch(err) {
             testFailures++
-            $.electionSystem.say(err)
         }
     }
 
     function test(){
-        testRegistry = [
-                    testNominateNominatesNewCandidate,
-                    testNominateAddsToNomination,
-                    testNominateRemovesLeadingAtSign,
-                    testNoNominationsResultsInNoElection,
-                    testUserIsUnableToNominateTwice,
-                    testUserIsUnableToNominateThemselves,
-                    testUserIsAbleToVoteForThemselves,
-                    testUserIsUnableToVoteTwice,
-                    testAtSignIsRemovedFromVote,
-                    testVotingIsCaseInsensitive,
-                    testUsersCanOnlyVoteForPeopleOnTheBallot,
-                    testPresidentIsElectedCorrectly,
-                    testNoVotesResultsInNoPresident,
-                    testPresCanRunPresCommand,
-                    testOthersCannotRunPresCommand
-        ]
-        testFailures = 0
-        $.electionSystem.shouldTalk = false
-        for(var i = 0; i < testRegistry.length; i++){
+        try{
+            testRegistry = [
+                        testNominateNominatesNewCandidate,
+                        testNominateAddsToNomination,
+                        testNominateRemovesLeadingAtSign,
+                        testNoNominationsResultsInNoElection,
+                        testUserIsUnableToNominateTwice,
+                        testUserIsUnableToNominateThemselves,
+                        testUserIsAbleToVoteForThemselves,
+                        testUserIsUnableToVoteTwice,
+                        testAtSignIsRemovedFromVote,
+                        testVotingIsCaseInsensitive,
+                        testUsersCanOnlyVoteForPeopleOnTheBallot,
+                        testPresidentIsElectedCorrectly,
+                        testNoVotesResultsInNoPresident,
+                        testSubscribersNotified
+            ]
+            testFailures = 0
+            $.electionSystem.shouldTalk = false
+            $.electionSystem.subscribe(stateSpy)
+            for(var i = 0; i < testRegistry.length; i++){
+                $.electionSystem.say("\n\n\n")
+                $.electionSystem.reset()
+                testRegistry[i]()
+            }
             $.electionSystem.say("\n\n\n")
-            $.electionSystem.reset()
-            testRegistry[i]()
+            $.say("Tests complete.  " + testFailures + " failures.  Check the logs for more verbose output")
+        } catch(e){
+            $.electionSystem.say("Fatal Test Error")
+            $.electionSystem.say(e)
         }
-        $.say("Tests complete.  " + testFailures + " failures.  Check the logs for more verbose output")
     }
 
     function setUpNominations() {
